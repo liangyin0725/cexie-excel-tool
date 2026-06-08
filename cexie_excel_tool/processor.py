@@ -105,6 +105,28 @@ def apply_corrections_to_folder(folder: str | Path, rules: Mapping[str, Mapping[
     )
 
 
+def copy_rules_to_all_points(
+    source_point_id: str,
+    workbooks: list[WorkbookInfo],
+    rules: Mapping[str, Mapping[str, CorrectionRule]],
+) -> RuleMap:
+    source_rules = dict(rules.get(source_point_id, {}))
+    copied: RuleMap = {
+        point_id: dict(column_rules)
+        for point_id, column_rules in rules.items()
+    }
+
+    for info in workbooks:
+        point_rules: dict[str, CorrectionRule] = {}
+        available_headers = set(info.headers)
+        for header, rule in source_rules.items():
+            if header in available_headers:
+                point_rules[header] = rule
+        copied[info.point_id] = point_rules
+
+    return copied
+
+
 def save_rules(path: str | Path, rules: Mapping[str, Mapping[str, CorrectionRule]]) -> None:
     payload = {
         "version": 1,

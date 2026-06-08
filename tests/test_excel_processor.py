@@ -8,6 +8,7 @@ from openpyxl import Workbook, load_workbook
 from cexie_excel_tool.processor import (
     CorrectionRule,
     apply_corrections_to_folder,
+    copy_rules_to_all_points,
     discover_workbooks,
     load_rules,
     save_rules,
@@ -111,6 +112,41 @@ class ExcelProcessorTests(unittest.TestCase):
             self.assertEqual(raw["version"], 1)
             self.assertEqual(loaded["18T-ZQT05"]["A0"], CorrectionRule("add", "1.2"))
             self.assertEqual(loaded["18T-ZQT05"]["设备编号"], CorrectionRule("replace", "X"))
+
+    def test_copies_one_points_rules_to_all_matching_columns(self):
+        workbooks = [
+            make_info("18T-ZQT05", ["A0", "A180", "设备编号"]),
+            make_info("18T-ZQT06", ["A0", "A180", "设备编号"]),
+            make_info("18T-ZQT07", ["A0", "设备编号"]),
+        ]
+        rules = {
+            "18T-ZQT05": {
+                "A0": CorrectionRule("add", "1"),
+                "A180": CorrectionRule("sub", "2"),
+                "设备编号": CorrectionRule("replace", "DEVICE-X"),
+            },
+            "18T-ZQT06": {"A0": CorrectionRule("mul", "9")},
+        }
+
+        updated = copy_rules_to_all_points("18T-ZQT05", workbooks, rules)
+
+        self.assertEqual(updated["18T-ZQT06"]["A0"], CorrectionRule("add", "1"))
+        self.assertEqual(updated["18T-ZQT06"]["A180"], CorrectionRule("sub", "2"))
+        self.assertEqual(updated["18T-ZQT06"]["设备编号"], CorrectionRule("replace", "DEVICE-X"))
+        self.assertEqual(updated["18T-ZQT07"]["A0"], CorrectionRule("add", "1"))
+        self.assertNotIn("A180", updated["18T-ZQT07"])
+        self.assertEqual(updated["18T-ZQT07"]["设备编号"], CorrectionRule("replace", "DEVICE-X"))
+
+
+def make_info(point_id: str, headers: list[str]):
+    from cexie_excel_tool.processor import WorkbookInfo
+
+    return WorkbookInfo(
+        path=Path(f"{point_id}.xlsx"),
+        point_id=point_id,
+        sheet_name=point_id,
+        headers=headers,
+    )
 
 
 if __name__ == "__main__":

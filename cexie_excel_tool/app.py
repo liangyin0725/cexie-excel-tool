@@ -8,6 +8,7 @@ from .processor import (
     CorrectionRule,
     WorkbookInfo,
     apply_corrections_to_folder,
+    copy_rules_to_all_points,
     discover_workbooks,
     load_rules,
     save_rules,
@@ -114,6 +115,7 @@ class CorrectionApp(tk.Tk):
         point_combo = ttk.Combobox(selector, textvariable=self.current_point, values=point_ids, state="readonly", width=24)
         point_combo.pack(side="left")
         point_combo.bind("<<ComboboxSelected>>", self._change_point)
+        ttk.Button(selector, text="应用到全部点号", command=self._apply_current_rules_to_all_points).pack(side="left", padx=(12, 0))
 
         self.rules_holder = ttk.Frame(frame)
         self.rules_holder.grid(row=2, column=0, sticky="nsew")
@@ -192,6 +194,14 @@ class CorrectionApp(tk.Tk):
     def _change_point(self, _event: tk.Event) -> None:
         self._collect_visible_rules_if_present()
         self._render_rule_table()
+
+    def _apply_current_rules_to_all_points(self) -> None:
+        self._collect_visible_rules_if_present()
+        source_point = self.current_point.get()
+        self.rules = copy_rules_to_all_points(source_point, self.workbooks, self.rules)
+        self._ensure_rules_for_workbooks()
+        self._render_rule_table()
+        self.status.set(f"已将 {source_point} 的修正规则应用到全部点号。")
 
     def _collect_visible_rules(self) -> None:
         for (point_id, header), (op_var, value_var) in self.rule_widgets.items():
