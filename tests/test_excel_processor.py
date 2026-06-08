@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 
@@ -99,6 +100,37 @@ class ExcelProcessorTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 apply_corrections_to_folder(folder, {"18T-ZQT05": {"A0": CorrectionRule("div", "0")}})
+
+    def test_applies_formula_rule_with_x_and_rand_function(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动测斜-18T-ZQT05-原始数据.xlsx"
+            make_workbook(source)
+            rules = {
+                "18T-ZQT05": {
+                    "深度（m）": CorrectionRule("formula", "x * 2 + 1"),
+                    "A0": CorrectionRule("formula", "x + rand() * 10"),
+                }
+            }
+
+            with patch("cexie_excel_tool.processor.random.random", return_value=0.25):
+                summary = apply_corrections_to_folder(folder, rules)
+
+            self.assertEqual(summary.processed_files, 1)
+            self.assertEqual(summary.skipped_cells, 0)
+            ws = load_workbook(summary.outputs[0], data_only=True).active
+            self.assertEqual(ws["A2"].value, 2.0)
+            self.assertEqual(ws["A3"].value, 3.0)
+            self.assertEqual(ws["B2"].value, -20.0)
+            self.assertIsNone(ws["B3"].value)
+
+    def test_rejects_unsafe_formula_rule(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            make_workbook(folder / "手动测斜-18T-ZQT05-原始数据.xlsx")
+
+            with self.assertRaises(ValueError):
+                apply_corrections_to_folder(folder, {"18T-ZQT05": {"A0": CorrectionRule("formula", "__import__('os')")}})
 
     def test_saves_and_loads_rules(self):
         with tempfile.TemporaryDirectory() as tmp:

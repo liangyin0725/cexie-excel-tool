@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import json
+import random
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,7 +13,7 @@ from openpyxl import load_workbook
 
 
 POINT_ID_RE = re.compile(r"\b\d+[A-Z]?-ZQTS?\d+\b", re.IGNORECASE)
-VALID_OPS = {"add", "sub", "mul", "div", "replace"}
+VALID_OPS = {"add", "sub", "mul", "div", "replace", "formula"}
 
 
 @dataclass(frozen=True)
@@ -175,7 +177,9 @@ def _validate_rules(rules: Mapping[str, CorrectionRule]) -> None:
 def _validate_rule(rule: CorrectionRule) -> None:
     if rule.op not in VALID_OPS:
         raise ValueError(f"不支持的操作: {rule.op}")
-    if rule.op != "replace":
+    if rule.op == "formula":
+        _validate_formula(rule.value)
+    elif rule.op != "replace":
         number = _as_number(rule.value)
         if number is None:
             raise ValueError(f"数值规则必须填写数字: {rule.value}")
@@ -190,8 +194,14 @@ def _apply_rule(value: object, rule: CorrectionRule) -> tuple[object, bool]:
         return rule.value, False
 
     original = _as_number(value)
+    if original is None:
+        return value, True
+
+    if rule.op == "formula":
+        return _evaluate_formula(rule.value, original), False
+
     operand = _as_number(rule.value)
-    if original is None or operand is None:
+    if operand is None:
         return value, True
 
     if rule.op == "add":
@@ -219,6 +229,77 @@ def _as_number(value: object) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _validate_formula(expression: str) -> None:
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"公式格式错误: {expression}") from exc
+    _validate_formula_node(tree)
+
+
+def _evaluate_formula(expression: str, x: float) -> float:
+    tree = ast.parse(expression, mode="eval")
+    _validate_formula_node(tree)
+    return float(_eval_formula_node(tree.body, x))
+
+
+def _validate_formula_node(node: ast.AST) -> None:
+    allowed_binary = (ast.Add, ast.Sub, ast.Mult, ast.Div)
+    allowed_unary = (ast.UAdd, ast.USub)
+
+    if isinstance(node, ast.Expression):
+        _validate_formula_node(node.body)
+    elif isinstance(node, ast.BinOp):
+        if not isinstance(node.op, allowed_binary):
+            raise ValueError("公式只支持 +、-、*、/ 四则运算")
+        _validate_formula_node(node.left)
+        _validate_formula_node(node.right)
+    elif isinstance(node, ast.UnaryOp):
+        if not isinstance(node.op, allowed_unary):
+            raise ValueError("公式只支持正负号")
+        _validate_formula_node(node.operand)
+    elif isinstance(node, ast.Constant):
+        if not isinstance(node.value, int | float):
+            raise ValueError("公式里只能使用数字")
+    elif isinstance(node, ast.Name):
+        if node.id.lower() != "x":
+            raise ValueError("公式里只能使用 x 表示原单元格数值")
+    elif isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name) or node.func.id.lower() != "rand":
+            raise ValueError("公式里只支持 rand() 随机数函数")
+        if node.args or node.keywords:
+            raise ValueError("rand() 不接受参数")
+    else:
+        raise ValueError("公式包含不支持的内容")
+
+
+def _eval_formula_node(node: ast.AST, x: float) -> float:
+    if isinstance(node, ast.BinOp):
+        left = _eval_formula_node(node.left, x)
+        right = _eval_formula_node(node.right, x)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            return left / right
+    if isinstance(node, ast.UnaryOp):
+        value = _eval_formula_node(node.operand, x)
+        if isinstance(node.op, ast.UAdd):
+            return value
+        if isinstance(node.op, ast.USub):
+            return -value
+    if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
+        return float(node.value)
+    if isinstance(node, ast.Name) and node.id.lower() == "x":
+        return x
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id.lower() == "rand":
+        return random.random()
+    raise ValueError("公式包含不支持的内容")
 
 
 def _unique_output_path(output_dir: Path, source_path: Path) -> Path:

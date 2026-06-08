@@ -21,6 +21,7 @@ OP_LABELS = {
     "sub": "减 -",
     "mul": "乘 ×",
     "div": "除 ÷",
+    "formula": "公式",
     "replace": "替换",
 }
 LABEL_TO_OP = {label: op for op, label in OP_LABELS.items()}
@@ -102,7 +103,7 @@ class CorrectionApp(tk.Tk):
         frame = ttk.Frame(self.content, padding=16)
         frame.grid(sticky="nsew")
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=1)
+        frame.rowconfigure(3, weight=1)
 
         ttk.Label(frame, text="Step 2 按点号和列设置修正规则", font=("Microsoft YaHei UI", 18, "bold")).grid(row=0, column=0, sticky="w")
 
@@ -117,8 +118,14 @@ class CorrectionApp(tk.Tk):
         point_combo.bind("<<ComboboxSelected>>", self._change_point)
         ttk.Button(selector, text="应用到全部点号", command=self._apply_current_rules_to_all_points).pack(side="left", padx=(12, 0))
 
+        ttk.Label(
+            frame,
+            text="公式说明：选择“公式”后，在值/公式里写表达式；x 表示原值，rand() 表示 0~1 均匀随机数，例如 x + rand() * 0.5。",
+            foreground="#555",
+        ).grid(row=2, column=0, sticky="w", pady=(0, 8))
+
         self.rules_holder = ttk.Frame(frame)
-        self.rules_holder.grid(row=2, column=0, sticky="nsew")
+        self.rules_holder.grid(row=3, column=0, sticky="nsew")
         self.rules_holder.columnconfigure(0, weight=1)
         self.rules_holder.rowconfigure(0, weight=1)
         self._render_rule_table()
@@ -176,7 +183,7 @@ class CorrectionApp(tk.Tk):
 
         ttk.Label(table, text="列名", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=6, pady=6)
         ttk.Label(table, text="操作", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=6, pady=6)
-        ttk.Label(table, text="值", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=2, sticky="w", padx=6, pady=6)
+        ttk.Label(table, text="值/公式", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=2, sticky="w", padx=6, pady=6)
 
         self.rule_widgets = {}
         point_rules = self.rules.setdefault(point_id, {})
