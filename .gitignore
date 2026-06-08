@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.spec
+.superpowers/
+2026-*/
+*.xlsx
