@@ -124,6 +124,35 @@ class ExcelProcessorTests(unittest.TestCase):
             self.assertEqual(ws["B2"].value, -20.0)
             self.assertIsNone(ws["B3"].value)
 
+    def test_formula_rule_can_reference_same_row_source_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动测斜-18T-ZQT05-原始数据.xlsx"
+            make_workbook(source)
+            rules = {
+                "18T-ZQT05": {
+                    "A0": CorrectionRule("add", "100"),
+                    "A180": CorrectionRule("formula", "x + [A0] + [深度（m）]"),
+                }
+            }
+
+            summary = apply_corrections_to_folder(folder, rules)
+
+            self.assertEqual(summary.processed_files, 1)
+            self.assertEqual(summary.skipped_cells, 1)
+            ws = load_workbook(summary.outputs[0], data_only=True).active
+            self.assertEqual(ws["B2"].value, 77.5)
+            self.assertEqual(ws["C2"].value, 1.0)
+            self.assertEqual(ws["C3"].value, "bad")
+
+    def test_formula_rule_rejects_missing_source_column_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            make_workbook(folder / "手动测斜-18T-ZQT05-原始数据.xlsx")
+
+            with self.assertRaises(ValueError):
+                apply_corrections_to_folder(folder, {"18T-ZQT05": {"A0": CorrectionRule("formula", "x + [不存在列]")}})
+
     def test_rejects_unsafe_formula_rule(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)

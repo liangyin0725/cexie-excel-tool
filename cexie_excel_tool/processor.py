@@ -13,6 +13,7 @@ from openpyxl import load_workbook
 
 
 POINT_ID_RE = re.compile(r"\b\d+[A-Z]?-ZQTS?\d+\b", re.IGNORECASE)
+COLUMN_REF_RE = re.compile(r"\[([^\]]+)\]")
 VALID_OPS = {"add", "sub", "mul", "div", "replace", "formula"}
 
 
@@ -81,14 +82,23 @@ def apply_corrections_to_folder(folder: str | Path, rules: Mapping[str, Mapping[
             "" if cell.value is None else str(cell.value): cell.column
             for cell in ws[1]
         }
+        original_rows = {
+            row: {
+                header: ws.cell(row=row, column=column).value
+                for header, column in header_to_column.items()
+            }
+            for row in range(2, ws.max_row + 1)
+        }
 
         for header, rule in point_rules.items():
             if not rule.op or header not in header_to_column:
                 continue
+            if rule.op == "formula":
+                _validate_formula_references(rule.value, header_to_column)
             column_index = header_to_column[header]
             for row in range(2, ws.max_row + 1):
                 cell = ws.cell(row=row, column=column_index)
-                new_value, skipped = _apply_rule(cell.value, rule)
+                new_value, skipped = _apply_rule(cell.value, rule, original_rows[row])
                 if skipped:
                     skipped_cells += 1
                     continue
@@ -187,7 +197,7 @@ def _validate_rule(rule: CorrectionRule) -> None:
             raise ValueError("除法规则不能填写 0")
 
 
-def _apply_rule(value: object, rule: CorrectionRule) -> tuple[object, bool]:
+def _apply_rule(value: object, rule: CorrectionRule, row_values: Mapping[str, object] | None = None) -> tuple[object, bool]:
     if value is None:
         return value, False
     if rule.op == "replace":
@@ -198,7 +208,10 @@ def _apply_rule(value: object, rule: CorrectionRule) -> tuple[object, bool]:
         return value, True
 
     if rule.op == "formula":
-        return _evaluate_formula(rule.value, original), False
+        result = _evaluate_formula(rule.value, original, row_values or {})
+        if result is None:
+            return value, True
+        return result, False
 
     operand = _as_number(rule.value)
     if operand is None:
@@ -232,17 +245,45 @@ def _as_number(value: object) -> float | None:
 
 
 def _validate_formula(expression: str) -> None:
+    prepared, _references = _prepare_formula(expression)
     try:
-        tree = ast.parse(expression, mode="eval")
+        tree = ast.parse(prepared, mode="eval")
     except SyntaxError as exc:
         raise ValueError(f"公式格式错误: {expression}") from exc
     _validate_formula_node(tree)
 
 
-def _evaluate_formula(expression: str, x: float) -> float:
-    tree = ast.parse(expression, mode="eval")
+def _validate_formula_references(expression: str, header_to_column: Mapping[str, int]) -> None:
+    _prepared, references = _prepare_formula(expression)
+    missing = [header for header in references.values() if header not in header_to_column]
+    if missing:
+        raise ValueError(f"公式引用了不存在的列: {', '.join(missing)}")
+
+
+def _evaluate_formula(expression: str, x: float, row_values: Mapping[str, object]) -> float | None:
+    prepared, references = _prepare_formula(expression)
+    ref_values: dict[str, float] = {}
+    for variable, header in references.items():
+        value = _as_number(row_values.get(header))
+        if value is None:
+            return None
+        ref_values[variable] = value
+
+    tree = ast.parse(prepared, mode="eval")
     _validate_formula_node(tree)
-    return float(_eval_formula_node(tree.body, x))
+    return float(_eval_formula_node(tree.body, x, ref_values))
+
+
+def _prepare_formula(expression: str) -> tuple[str, dict[str, str]]:
+    references: dict[str, str] = {}
+
+    def replace(match: re.Match[str]) -> str:
+        header = match.group(1).strip()
+        variable = f"col_{len(references)}"
+        references[variable] = header
+        return variable
+
+    return COLUMN_REF_RE.sub(replace, expression), references
 
 
 def _validate_formula_node(node: ast.AST) -> None:
@@ -264,8 +305,8 @@ def _validate_formula_node(node: ast.AST) -> None:
         if not isinstance(node.value, int | float):
             raise ValueError("公式里只能使用数字")
     elif isinstance(node, ast.Name):
-        if node.id.lower() != "x":
-            raise ValueError("公式里只能使用 x 表示原单元格数值")
+        if node.id.lower() != "x" and not re.fullmatch(r"col_\d+", node.id):
+            raise ValueError("公式里只能使用 x 或 [列名] 表示单元格数值")
     elif isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name) or node.func.id.lower() != "rand":
             raise ValueError("公式里只支持 rand() 随机数函数")
@@ -275,10 +316,10 @@ def _validate_formula_node(node: ast.AST) -> None:
         raise ValueError("公式包含不支持的内容")
 
 
-def _eval_formula_node(node: ast.AST, x: float) -> float:
+def _eval_formula_node(node: ast.AST, x: float, ref_values: Mapping[str, float]) -> float:
     if isinstance(node, ast.BinOp):
-        left = _eval_formula_node(node.left, x)
-        right = _eval_formula_node(node.right, x)
+        left = _eval_formula_node(node.left, x, ref_values)
+        right = _eval_formula_node(node.right, x, ref_values)
         if isinstance(node.op, ast.Add):
             return left + right
         if isinstance(node.op, ast.Sub):
@@ -288,7 +329,7 @@ def _eval_formula_node(node: ast.AST, x: float) -> float:
         if isinstance(node.op, ast.Div):
             return left / right
     if isinstance(node, ast.UnaryOp):
-        value = _eval_formula_node(node.operand, x)
+        value = _eval_formula_node(node.operand, x, ref_values)
         if isinstance(node.op, ast.UAdd):
             return value
         if isinstance(node.op, ast.USub):
@@ -297,6 +338,8 @@ def _eval_formula_node(node: ast.AST, x: float) -> float:
         return float(node.value)
     if isinstance(node, ast.Name) and node.id.lower() == "x":
         return x
+    if isinstance(node, ast.Name) and node.id in ref_values:
+        return ref_values[node.id]
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id.lower() == "rand":
         return random.random()
     raise ValueError("公式包含不支持的内容")

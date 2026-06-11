@@ -120,7 +120,7 @@ class CorrectionApp(tk.Tk):
 
         ttk.Label(
             frame,
-            text="公式说明：选择“公式”后，在值/公式里写表达式；x 表示原值，rand() 表示 0~1 均匀随机数，例如 x + rand() * 0.5。",
+            text="公式说明：x 表示本列原值，[列名] 表示同一行其他列原值，rand() 表示 0~1 随机数，例如 x + [A0] * 0.1 + rand()。",
             foreground="#555",
         ).grid(row=2, column=0, sticky="w", pady=(0, 8))
 
