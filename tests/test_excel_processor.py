@@ -38,6 +38,17 @@ def make_full_inclinometer_workbook(path: Path) -> None:
     wb.save(path)
 
 
+def make_multi_sheet_inclinometer_workbook(path: Path) -> None:
+    wb = Workbook()
+    for index, title in enumerate(["手动测斜-18T-ZQT03-202606110750", "手动测斜2-JM3-202606110652"]):
+        ws = wb.active if index == 0 else wb.create_sheet()
+        ws.title = title
+        ws.append(["深度（m）", "A0", "A180", "A轴管口起算", "A轴管底起算", "B0", "B180", "B轴管口起算", "B轴管底起算", "设备编号"])
+        ws.append([0.5, -23.03, 23.72, None, None, 5.51, -26.67, None, None, "CM024290037"])
+        ws.append([1.0, -27.16, 29.75, None, None, -5.62, -15.06, None, None, None])
+    wb.save(path)
+
+
 class ExcelProcessorTests(unittest.TestCase):
     def test_discovers_xlsx_files_headers_and_point_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -50,6 +61,16 @@ class ExcelProcessorTests(unittest.TestCase):
             self.assertEqual(len(found), 1)
             self.assertEqual(found[0].point_id, "18T-ZQT05")
             self.assertEqual(found[0].headers, ["深度（m）", "A0", "A180", "设备编号"])
+
+    def test_discovers_each_sheet_in_multi_sheet_workbooks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            make_multi_sheet_inclinometer_workbook(folder / "手动-2026-06-11-单日所有原始数据.xlsx")
+
+            found = discover_workbooks(folder)
+
+            self.assertEqual([item.point_id for item in found], ["18T-ZQT03", "JM3"])
+            self.assertEqual([item.sheet_name for item in found], ["手动测斜-18T-ZQT03-202606110750", "手动测斜2-JM3-202606110652"])
 
     def test_applies_numeric_and_replace_rules_without_overwriting_source(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -208,6 +229,31 @@ class ExcelProcessorTests(unittest.TestCase):
             self.assertEqual(ws["H3"].value, -20.81)
             self.assertEqual(ws["I2"].value, 20.81)
             self.assertEqual(ws["I3"].value, 4.72)
+
+    def test_processes_all_sheets_in_a_multi_sheet_workbook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动-2026-06-11-单日所有原始数据.xlsx"
+            make_multi_sheet_inclinometer_workbook(source)
+            rules = {
+                "18T-ZQT03": {"A0": CorrectionRule("add", "0")},
+                "JM3": {"A0": CorrectionRule("add", "1")},
+            }
+
+            summary = apply_corrections_to_folder(folder, rules)
+
+            self.assertEqual(summary.processed_files, 1)
+            self.assertEqual(len(summary.outputs), 1)
+            wb = load_workbook(summary.outputs[0], data_only=True)
+            first = wb["手动测斜-18T-ZQT03-202606110750"]
+            second = wb["手动测斜2-JM3-202606110652"]
+            self.assertEqual(first["D3"].value, 51.84)
+            self.assertEqual(first["E2"].value, -51.84)
+            self.assertEqual(second["B2"].value, -22.03)
+            self.assertEqual(second["D2"].value, 22.88)
+            self.assertEqual(second["D3"].value, 50.84)
+            self.assertEqual(second["E2"].value, -50.84)
+            wb.close()
 
     def test_rejects_unsafe_formula_rule(self):
         with tempfile.TemporaryDirectory() as tmp:

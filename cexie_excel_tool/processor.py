@@ -57,10 +57,10 @@ def discover_workbooks(folder: str | Path) -> list[WorkbookInfo]:
         if path.name.startswith("~$"):
             continue
         wb = load_workbook(path, read_only=True, data_only=True)
-        ws = wb.worksheets[0]
-        headers = ["" if cell.value is None else str(cell.value) for cell in next(ws.iter_rows(min_row=1, max_row=1))]
-        point_id = _extract_point_id(path.name) or _extract_point_id(ws.title) or path.stem
-        workbooks.append(WorkbookInfo(path=path, point_id=point_id, sheet_name=ws.title, headers=headers))
+        for ws in wb.worksheets:
+            headers = ["" if cell.value is None else str(cell.value) for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+            point_id = _extract_point_id(ws.title) or _extract_point_id(path.name) or path.stem
+            workbooks.append(WorkbookInfo(path=path, point_id=point_id, sheet_name=ws.title, headers=headers))
         wb.close()
     return workbooks
 
@@ -74,47 +74,56 @@ def apply_corrections_to_folder(folder: str | Path, rules: Mapping[str, Mapping[
     skipped_files: list[str] = []
     skipped_cells = 0
 
+    infos_by_path: dict[Path, list[WorkbookInfo]] = {}
     for info in discover_workbooks(root):
-        point_rules = dict(rules.get(info.point_id, {}))
-        if not _has_effective_rules(point_rules):
-            skipped_files.append(info.path.name)
-            continue
+        infos_by_path.setdefault(info.path, []).append(info)
 
-        _validate_rules(point_rules)
-        wb = load_workbook(info.path)
-        ws = wb.worksheets[0]
-        header_to_column = {
-            "" if cell.value is None else str(cell.value): cell.column
-            for cell in ws[1]
-        }
-        original_rows = {
-            row: {
-                header: ws.cell(row=row, column=column).value
-                for header, column in header_to_column.items()
-            }
-            for row in range(2, ws.max_row + 1)
-        }
+    for path, infos in infos_by_path.items():
+        wb = load_workbook(path)
+        workbook_changed = False
 
-        for header, rule in point_rules.items():
-            if not rule.op or header not in header_to_column:
+        for info in infos:
+            point_rules = dict(rules.get(info.point_id, {}))
+            if not _has_effective_rules(point_rules):
+                skipped_files.append(f"{info.path.name}::{info.sheet_name}")
                 continue
-            if rule.op == "formula":
-                _validate_formula_references(rule.value, header_to_column)
-            column_index = header_to_column[header]
-            for row in range(2, ws.max_row + 1):
-                cell = ws.cell(row=row, column=column_index)
-                new_value, skipped = _apply_rule(cell.value, rule, original_rows[row])
-                if skipped:
-                    skipped_cells += 1
+
+            _validate_rules(point_rules)
+            ws = wb[info.sheet_name]
+            header_to_column = {
+                "" if cell.value is None else str(cell.value): cell.column
+                for cell in ws[1]
+            }
+            original_rows = {
+                row: {
+                    header: ws.cell(row=row, column=column).value
+                    for header, column in header_to_column.items()
+                }
+                for row in range(2, ws.max_row + 1)
+            }
+
+            for header, rule in point_rules.items():
+                if not rule.op or header not in header_to_column:
                     continue
-                cell.value = new_value
+                if rule.op == "formula":
+                    _validate_formula_references(rule.value, header_to_column)
+                column_index = header_to_column[header]
+                for row in range(2, ws.max_row + 1):
+                    cell = ws.cell(row=row, column=column_index)
+                    new_value, skipped = _apply_rule(cell.value, rule, original_rows[row])
+                    if skipped:
+                        skipped_cells += 1
+                        continue
+                    cell.value = new_value
 
-        skipped_cells += _recalculate_inclinometer_columns(ws, header_to_column)
+            skipped_cells += _recalculate_inclinometer_columns(ws, header_to_column)
+            workbook_changed = True
 
-        output_path = _unique_output_path(output_dir, info.path)
-        wb.save(output_path)
+        if workbook_changed:
+            output_path = _unique_output_path(output_dir, path)
+            wb.save(output_path)
+            outputs.append(output_path)
         wb.close()
-        outputs.append(output_path)
 
     return ProcessSummary(
         processed_files=len(outputs),
@@ -178,7 +187,14 @@ def load_rules(path: str | Path) -> RuleMap:
 
 def _extract_point_id(text: str) -> str | None:
     match = POINT_ID_RE.search(text)
-    return match.group(0).upper() if match else None
+    if match:
+        return match.group(0).upper()
+
+    sheet_match = re.search(r"^[^-]+-(.+)-\d{12}$", text)
+    if sheet_match:
+        return sheet_match.group(1).strip()
+
+    return None
 
 
 def _has_effective_rules(rules: Mapping[str, CorrectionRule]) -> bool:

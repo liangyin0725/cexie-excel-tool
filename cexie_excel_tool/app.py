@@ -83,7 +83,7 @@ class CorrectionApp(tk.Tk):
         frame.columnconfigure(0, weight=1)
 
         ttk.Label(frame, text="Step 1 选择原始 Excel 文件夹", font=("Microsoft YaHei UI", 18, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Label(frame, text="程序只读取该文件夹下的 .xlsx 文件，不会修改原始文件。").grid(row=1, column=0, sticky="w", pady=(8, 20))
+        ttk.Label(frame, text="程序只读取该文件夹下的 .xlsx 文件，不会修改原始文件；多 sheet 工作簿会把每个 sheet 当作一个点号处理。").grid(row=1, column=0, sticky="w", pady=(8, 20))
         ttk.Button(frame, text="选择文件夹", command=self._choose_folder).grid(row=2, column=0, sticky="w")
 
         self.folder_label = ttk.Label(frame, text=self._folder_text(), foreground="#333")
