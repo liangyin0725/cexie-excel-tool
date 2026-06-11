@@ -11,6 +11,7 @@ from cexie_excel_tool.processor import (
     apply_corrections_to_folder,
     copy_rules_to_all_points,
     discover_workbooks,
+    export_a0_summary,
     load_rules,
     save_rules,
 )
@@ -254,6 +255,38 @@ class ExcelProcessorTests(unittest.TestCase):
             self.assertEqual(second["D3"].value, 50.84)
             self.assertEqual(second["E2"].value, -50.84)
             wb.close()
+
+    def test_exports_a0_summary_from_all_sheets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动-2026-06-11-单日所有原始数据.xlsx"
+            make_multi_sheet_inclinometer_workbook(source)
+
+            output = export_a0_summary(source)
+
+            self.assertEqual(output.name, "手动-2026-06-11-单日所有原始数据-A0汇总.xlsx")
+            wb = load_workbook(output, data_only=True)
+            ws = wb.active
+            self.assertEqual(ws.title, "A0汇总")
+            self.assertEqual([ws["A1"].value, ws["B1"].value, ws["C1"].value], ["深度（m）", "18T-ZQT03", "JM3"])
+            self.assertEqual([ws["A2"].value, ws["B2"].value, ws["C2"].value], [0.5, -23.03, -23.03])
+            self.assertEqual([ws["A3"].value, ws["B3"].value, ws["C3"].value], [1.0, -27.16, -27.16])
+            self.assertEqual(ws.freeze_panes, "B2")
+            wb.close()
+
+    def test_exports_a0_summary_with_unique_name_when_output_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动-2026-06-11-单日所有原始数据.xlsx"
+            make_multi_sheet_inclinometer_workbook(source)
+            existing = folder / "手动-2026-06-11-单日所有原始数据-A0汇总.xlsx"
+            existing.write_text("existing", encoding="utf-8")
+
+            output = export_a0_summary(source)
+
+            self.assertNotEqual(output, existing)
+            self.assertTrue(output.name.startswith("手动-2026-06-11-单日所有原始数据-A0汇总-"))
+            self.assertTrue(output.exists())
 
     def test_rejects_unsafe_formula_rule(self):
         with tempfile.TemporaryDirectory() as tmp:

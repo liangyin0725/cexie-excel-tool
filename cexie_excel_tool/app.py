@@ -10,6 +10,7 @@ from .processor import (
     apply_corrections_to_folder,
     copy_rules_to_all_points,
     discover_workbooks,
+    export_a0_summary,
     load_rules,
     save_rules,
 )
@@ -57,6 +58,8 @@ class CorrectionApp(tk.Tk):
         ttk.Separator(sidebar).pack(fill="x", pady=16)
         ttk.Button(sidebar, text="保存参数", command=self._save_rules_dialog).pack(fill="x", pady=4)
         ttk.Button(sidebar, text="加载参数", command=self._load_rules_dialog).pack(fill="x", pady=4)
+        ttk.Separator(sidebar).pack(fill="x", pady=16)
+        ttk.Button(sidebar, text="汇总A0", command=self._export_a0_summary_dialog).pack(fill="x", pady=4)
 
         main = ttk.Frame(self, padding=(8, 16, 16, 16))
         main.grid(row=0, column=1, sticky="nsew")
@@ -255,6 +258,23 @@ class CorrectionApp(tk.Tk):
         self.status.set(f"参数已加载：{path}")
         if self.workbooks:
             self._show_step_2()
+
+    def _export_a0_summary_dialog(self) -> None:
+        path = filedialog.askopenfilename(
+            title="选择要汇总 A0 的 Excel 文件",
+            filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            output = export_a0_summary(path)
+        except Exception as exc:
+            messagebox.showerror("汇总失败", str(exc))
+            return
+
+        message = f"A0 汇总表已生成：\n{output}"
+        messagebox.showinfo("汇总完成", message)
+        self.status.set(message.replace("\n", " "))
 
     def _generate_files(self) -> None:
         self._collect_visible_rules_if_present()

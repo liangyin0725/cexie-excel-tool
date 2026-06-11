@@ -10,7 +10,8 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Mapping
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
 
 
 POINT_ID_RE = re.compile(r"\b\d+[A-Z]?-ZQTS?\d+\b", re.IGNORECASE)
@@ -133,6 +134,69 @@ def apply_corrections_to_folder(folder: str | Path, rules: Mapping[str, Mapping[
     )
 
 
+def export_a0_summary(workbook_path: str | Path, output_path: str | Path | None = None) -> Path:
+    source_path = Path(workbook_path)
+    if not source_path.exists() or not source_path.is_file():
+        raise ValueError(f"Excel 文件不存在: {source_path}")
+    if source_path.suffix.lower() != ".xlsx":
+        raise ValueError("只支持 .xlsx 文件")
+
+    output = Path(output_path) if output_path else source_path.with_name(f"{source_path.stem}-A0汇总{source_path.suffix}")
+    output = _unique_path(output)
+
+    source_wb = load_workbook(source_path, read_only=True, data_only=True)
+    try:
+        depths: list[object] = []
+        depth_seen: set[object] = set()
+        series: list[tuple[str, dict[object, object]]] = []
+
+        for ws in source_wb.worksheets:
+            header_to_column = _header_to_column(ws)
+            if "深度（m）" not in header_to_column or "A0" not in header_to_column:
+                continue
+
+            point_id = _extract_point_id(ws.title) or _extract_point_id(source_path.name) or ws.title
+            values_by_depth: dict[object, object] = {}
+            depth_col = header_to_column["深度（m）"]
+            a0_col = header_to_column["A0"]
+
+            for row in range(2, ws.max_row + 1):
+                depth_value = ws.cell(row=row, column=depth_col).value
+                if depth_value is None:
+                    continue
+                if depth_value not in depth_seen:
+                    depth_seen.add(depth_value)
+                    depths.append(depth_value)
+                values_by_depth[depth_value] = ws.cell(row=row, column=a0_col).value
+
+            series.append((point_id, values_by_depth))
+    finally:
+        source_wb.close()
+
+    if not series:
+        raise ValueError("没有找到同时包含“深度（m）”和“A0”的 sheet")
+
+    summary_wb = Workbook()
+    ws = summary_wb.active
+    ws.title = "A0汇总"
+    headers = ["深度（m）", *[point_id for point_id, _values in series]]
+    ws.append(headers)
+
+    for depth in depths:
+        ws.append([depth, *[values.get(depth) for _point_id, values in series]])
+
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "B2"
+    ws.column_dimensions["A"].width = 14
+    for column_index in range(2, len(headers) + 1):
+        ws.column_dimensions[ws.cell(row=1, column=column_index).column_letter].width = 16
+
+    summary_wb.save(output)
+    summary_wb.close()
+    return output
+
+
 def copy_rules_to_all_points(
     source_point_id: str,
     workbooks: list[WorkbookInfo],
@@ -195,6 +259,14 @@ def _extract_point_id(text: str) -> str | None:
         return sheet_match.group(1).strip()
 
     return None
+
+
+def _header_to_column(ws) -> dict[str, int]:
+    try:
+        header_cells = next(ws.iter_rows(min_row=1, max_row=1))
+    except StopIteration:
+        return {}
+    return {"" if cell.value is None else str(cell.value): cell.column for cell in header_cells}
 
 
 def _has_effective_rules(rules: Mapping[str, CorrectionRule]) -> bool:
@@ -436,12 +508,18 @@ def _eval_formula_node(node: ast.AST, x: float, ref_values: Mapping[str, float])
 
 def _unique_output_path(output_dir: Path, source_path: Path) -> Path:
     target = output_dir / f"{source_path.stem}-修正后{source_path.suffix}"
+    return _unique_path(target)
+
+
+def _unique_path(target: Path) -> Path:
     if not target.exists():
         return target
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    target = output_dir / f"{source_path.stem}-修正后-{stamp}{source_path.suffix}"
+    base_stem = target.stem
+    suffix = target.suffix
+    target = target.with_name(f"{base_stem}-{stamp}{suffix}")
     counter = 2
     while target.exists():
-        target = output_dir / f"{source_path.stem}-修正后-{stamp}-{counter}{source_path.suffix}"
+        target = target.with_name(f"{base_stem}-{stamp}-{counter}{suffix}")
         counter += 1
     return target
