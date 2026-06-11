@@ -6,6 +6,7 @@ import random
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Mapping
 
@@ -15,6 +16,10 @@ from openpyxl import load_workbook
 POINT_ID_RE = re.compile(r"\b\d+[A-Z]?-ZQTS?\d+\b", re.IGNORECASE)
 COLUMN_REF_RE = re.compile(r"\[([^\]]+)\]")
 VALID_OPS = {"add", "sub", "mul", "div", "replace", "formula"}
+DERIVED_COLUMN_GROUPS = (
+    ("A0", "A180", "A轴管口起算", "A轴管底起算"),
+    ("B0", "B180", "B轴管口起算", "B轴管底起算"),
+)
 
 
 @dataclass(frozen=True)
@@ -103,6 +108,8 @@ def apply_corrections_to_folder(folder: str | Path, rules: Mapping[str, Mapping[
                     skipped_cells += 1
                     continue
                 cell.value = new_value
+
+        skipped_cells += _recalculate_inclinometer_columns(ws, header_to_column)
 
         output_path = _unique_output_path(output_dir, info.path)
         wb.save(output_path)
@@ -226,6 +233,72 @@ def _apply_rule(value: object, rule: CorrectionRule, row_values: Mapping[str, ob
     if rule.op == "div":
         return original / operand, False
     return value, True
+
+
+def _recalculate_inclinometer_columns(ws, header_to_column: Mapping[str, int]) -> int:
+    skipped = 0
+    for zero_header, reverse_header, top_header, bottom_header in DERIVED_COLUMN_GROUPS:
+        required = (zero_header, reverse_header, top_header, bottom_header)
+        if any(header not in header_to_column for header in required):
+            continue
+
+        zero_col = header_to_column[zero_header]
+        reverse_col = header_to_column[reverse_header]
+        top_col = header_to_column[top_header]
+        bottom_col = header_to_column[bottom_header]
+
+        increments: list[Decimal | None] = []
+        for row in range(2, ws.max_row + 1):
+            increment = _half_difference_rounded(ws.cell(row=row, column=zero_col).value, ws.cell(row=row, column=reverse_col).value)
+            if increment is None:
+                increments.append(None)
+                skipped += 2
+            else:
+                increments.append(increment)
+
+        running_top = Decimal("0")
+        for offset, increment in enumerate(increments):
+            row = offset + 2
+            if increment is None:
+                continue
+            running_top += increment
+            ws.cell(row=row, column=top_col).value = _decimal_to_cell_value(running_top)
+
+        running_bottom = Decimal("0")
+        bottom_values: list[Decimal | None] = [None] * len(increments)
+        for offset in range(len(increments) - 1, -1, -1):
+            increment = increments[offset]
+            if increment is None:
+                continue
+            running_bottom += increment
+            bottom_values[offset] = -running_bottom
+
+        for offset, value in enumerate(bottom_values):
+            if value is not None:
+                ws.cell(row=offset + 2, column=bottom_col).value = _decimal_to_cell_value(value)
+
+    return skipped
+
+
+def _half_difference_rounded(zero_value: object, reverse_value: object) -> Decimal | None:
+    zero = _as_decimal(zero_value)
+    reverse = _as_decimal(reverse_value)
+    if zero is None or reverse is None:
+        return None
+    return ((reverse - zero) / Decimal("2")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _as_decimal(value: object) -> Decimal | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return Decimal(str(value).strip())
+    except (InvalidOperation, AttributeError):
+        return None
+
+
+def _decimal_to_cell_value(value: Decimal) -> float:
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def _as_number(value: object) -> float | None:

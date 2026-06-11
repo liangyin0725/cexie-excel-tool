@@ -103,7 +103,7 @@ class CorrectionApp(tk.Tk):
         frame = ttk.Frame(self.content, padding=16)
         frame.grid(sticky="nsew")
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(3, weight=1)
+        frame.rowconfigure(4, weight=1)
 
         ttk.Label(frame, text="Step 2 按点号和列设置修正规则", font=("Microsoft YaHei UI", 18, "bold")).grid(row=0, column=0, sticky="w")
 
@@ -123,9 +123,14 @@ class CorrectionApp(tk.Tk):
             text="公式说明：x 表示本列原值，[列名] 表示同一行其他列原值，rand() 表示 0~1 随机数，例如 x + [A0] * 0.1 + rand()。",
             foreground="#555",
         ).grid(row=2, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(
+            frame,
+            text="自动重算：A轴管口/管底起算、B轴管口/管底起算会根据修正后的 A0/A180/B0/B180 自动更新。",
+            foreground="#555",
+        ).grid(row=3, column=0, sticky="w", pady=(0, 8))
 
         self.rules_holder = ttk.Frame(frame)
-        self.rules_holder.grid(row=3, column=0, sticky="nsew")
+        self.rules_holder.grid(row=4, column=0, sticky="nsew")
         self.rules_holder.columnconfigure(0, weight=1)
         self.rules_holder.rowconfigure(0, weight=1)
         self._render_rule_table()

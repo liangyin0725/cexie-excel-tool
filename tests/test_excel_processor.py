@@ -27,6 +27,17 @@ def make_workbook(path: Path, sheet_name: str = "手动测斜-18T-ZQT05-20260606
     wb.save(path)
 
 
+def make_full_inclinometer_workbook(path: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "手动测斜-18T-ZQT03-202606070749"
+    ws.append(["深度（m）", "A0", "A180", "A轴管口起算", "A轴管底起算", "B0", "B180", "B轴管口起算", "B轴管底起算", "设备编号"])
+    ws.append([0.5, -2, 4, 999, 999, 10, 4, 999, 999, "CM024"])
+    ws.append([1.0, -1, 5, 999, 999, 9, 3, 999, 999, None])
+    ws.append([1.5, 0, 6, 999, 999, 8, 2, 999, 999, None])
+    wb.save(path)
+
+
 class ExcelProcessorTests(unittest.TestCase):
     def test_discovers_xlsx_files_headers_and_point_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -152,6 +163,51 @@ class ExcelProcessorTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 apply_corrections_to_folder(folder, {"18T-ZQT05": {"A0": CorrectionRule("formula", "x + [不存在列]")}})
+
+    def test_recalculates_inclinometer_derived_columns_after_raw_adjustments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动测斜-18T-ZQT03-原始数据.xlsx"
+            make_full_inclinometer_workbook(source)
+            rules = {
+                "18T-ZQT03": {
+                    "A0": CorrectionRule("add", "1"),
+                    "B180": CorrectionRule("formula", "x + [深度（m）]"),
+                }
+            }
+
+            summary = apply_corrections_to_folder(folder, rules)
+
+            self.assertEqual(summary.processed_files, 1)
+            ws = load_workbook(summary.outputs[0], data_only=True).active
+            self.assertEqual([ws["D2"].value, ws["D3"].value, ws["D4"].value], [2.5, 5.0, 7.5])
+            self.assertEqual([ws["E2"].value, ws["E3"].value, ws["E4"].value], [-7.5, -5.0, -2.5])
+            self.assertEqual([ws["H2"].value, ws["H3"].value, ws["H4"].value], [-2.75, -5.25, -7.5])
+            self.assertEqual([ws["I2"].value, ws["I3"].value, ws["I4"].value], [7.5, 4.75, 2.25])
+
+    def test_inclinometer_recalculation_rounds_each_increment_half_up_before_accumulating(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动测斜-18T-ZQT03-原始数据.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "手动测斜-18T-ZQT03-202606070749"
+            ws.append(["深度（m）", "A0", "A180", "A轴管口起算", "A轴管底起算", "B0", "B180", "B轴管口起算", "B轴管底起算", "设备编号"])
+            ws.append([0.5, -23.03, 23.72, None, None, 5.51, -26.67, None, None, "CM024290037"])
+            ws.append([1.0, -27.16, 29.75, None, None, -5.62, -15.06, None, None, None])
+            wb.save(source)
+
+            summary = apply_corrections_to_folder(folder, {"18T-ZQT03": {"A0": CorrectionRule("add", "0")}})
+
+            ws = load_workbook(summary.outputs[0], data_only=True).active
+            self.assertEqual(ws["D2"].value, 23.38)
+            self.assertEqual(ws["D3"].value, 51.84)
+            self.assertEqual(ws["E2"].value, -51.84)
+            self.assertEqual(ws["E3"].value, -28.46)
+            self.assertEqual(ws["H2"].value, -16.09)
+            self.assertEqual(ws["H3"].value, -20.81)
+            self.assertEqual(ws["I2"].value, 20.81)
+            self.assertEqual(ws["I3"].value, 4.72)
 
     def test_rejects_unsafe_formula_rule(self):
         with tempfile.TemporaryDirectory() as tmp:
