@@ -16,7 +16,9 @@ from openpyxl.styles import Font
 
 POINT_ID_RE = re.compile(r"\b\d+[A-Z]?-ZQTS?\d+\b", re.IGNORECASE)
 COLUMN_REF_RE = re.compile(r"\[([^\]]+)\]")
+SHEET_TIMESTAMP_RE = re.compile(r"^(.*\d{8})\d{4}$")
 VALID_OPS = {"add", "sub", "mul", "div", "replace", "formula"}
+OUTPUT_NUMBER_FORMAT = "General"
 DERIVED_COLUMN_GROUPS = (
     ("A0", "A180", "A轴管口起算", "A轴管底起算"),
     ("B0", "B180", "B轴管口起算", "B轴管底起算"),
@@ -121,6 +123,8 @@ def apply_corrections_to_folder(folder: str | Path, rules: Mapping[str, Mapping[
             workbook_changed = True
 
         if workbook_changed:
+            _format_generated_numeric_cells(wb)
+            _rename_generated_sheet_times(wb)
             output_path = _unique_output_path(output_dir, path)
             wb.save(output_path)
             outputs.append(output_path)
@@ -175,6 +179,8 @@ def export_a0_summary(workbook_path: str | Path, output_path: str | Path | None 
 
     if not series:
         raise ValueError("没有找到同时包含“深度（m）”和“A0”的 sheet")
+
+    series = sorted(series, key=lambda item: _point_sort_key(item[0]))
 
     summary_wb = Workbook()
     ws = summary_wb.active
@@ -267,6 +273,18 @@ def _header_to_column(ws) -> dict[str, int]:
     except StopIteration:
         return {}
     return {"" if cell.value is None else str(cell.value): cell.column for cell in header_cells}
+
+
+def _point_sort_key(point_id: str) -> tuple[tuple[int, object], ...]:
+    parts: list[tuple[int, object]] = []
+    for part in re.split(r"(\d+)", point_id.upper()):
+        if part == "":
+            continue
+        if part.isdigit():
+            parts.append((0, int(part)))
+        else:
+            parts.append((1, part))
+    return tuple(parts)
 
 
 def _has_effective_rules(rules: Mapping[str, CorrectionRule]) -> bool:
@@ -366,6 +384,53 @@ def _recalculate_inclinometer_columns(ws, header_to_column: Mapping[str, int]) -
                 ws.cell(row=offset + 2, column=bottom_col).value = _decimal_to_cell_value(value)
 
     return skipped
+
+
+def _format_generated_numeric_cells(wb) -> None:
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                if cell.is_date:
+                    continue
+                rounded = _round_output_number(cell.value)
+                if rounded is None:
+                    continue
+                cell.value = rounded
+                cell.number_format = OUTPUT_NUMBER_FORMAT
+
+
+def _round_output_number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    number = _as_decimal(value)
+    if number is None:
+        return None
+    return float(number.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _rename_generated_sheet_times(wb) -> None:
+    used_titles = set(wb.sheetnames)
+    for ws in wb.worksheets:
+        match = SHEET_TIMESTAMP_RE.match(ws.title)
+        if not match:
+            continue
+
+        used_titles.remove(ws.title)
+        prefix = match.group(1)
+        for _attempt in range(1000):
+            candidate = f"{prefix}{_random_afternoon_time_suffix()}"
+            if candidate not in used_titles:
+                ws.title = candidate
+                used_titles.add(candidate)
+                break
+        else:
+            used_titles.add(ws.title)
+
+
+def _random_afternoon_time_suffix() -> str:
+    hour = random.randint(13, 17)
+    minute = random.randint(0, 59)
+    return f"{hour:02d}{minute:02d}"
 
 
 def _half_difference_rounded(zero_value: object, reverse_value: object) -> Decimal | None:

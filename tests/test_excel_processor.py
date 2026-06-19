@@ -50,6 +50,22 @@ def make_multi_sheet_inclinometer_workbook(path: Path) -> None:
     wb.save(path)
 
 
+def make_unsorted_multi_sheet_workbook(path: Path) -> None:
+    wb = Workbook()
+    sheets = [
+        ("手动测斜-18T-ZQT10-202606110750", -10),
+        ("手动测斜2-NP-ZQT6-202606110627", -6),
+        ("手动测斜-18T-ZQT03-202606110750", -3),
+        ("手动测斜2-NP-ZQT3-202606110643", -30),
+    ]
+    for index, (title, a0_value) in enumerate(sheets):
+        ws = wb.active if index == 0 else wb.create_sheet()
+        ws.title = title
+        ws.append(["深度（m）", "A0", "A180"])
+        ws.append([0.5, a0_value, 0])
+    wb.save(path)
+
+
 class ExcelProcessorTests(unittest.TestCase):
     def test_discovers_xlsx_files_headers_and_point_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -110,6 +126,34 @@ class ExcelProcessorTests(unittest.TestCase):
             original = load_workbook(source, data_only=True).active
             self.assertEqual(original["A2"].value, 0.5)
             self.assertEqual(original["D2"].value, "CM024")
+
+    def test_formats_generated_numeric_cells_to_one_or_two_decimals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动测斜-18T-ZQT05-原始数据.xlsx"
+            make_workbook(source)
+            rules = {
+                "18T-ZQT05": {
+                    "深度（m）": CorrectionRule("formula", "x + 0.004"),
+                    "A0": CorrectionRule("formula", "x / 7"),
+                    "A180": CorrectionRule("formula", "x / 2"),
+                }
+            }
+
+            summary = apply_corrections_to_folder(folder, rules)
+
+            wb = load_workbook(summary.outputs[0], data_only=False)
+            ws = wb.active
+            self.assertEqual(ws["A2"].value, 0.5)
+            self.assertEqual(ws["A2"].number_format, "General")
+            self.assertEqual(ws["A3"].value, 1)
+            self.assertEqual(ws["A3"].number_format, "General")
+            self.assertEqual(ws["B2"].value, -3.21)
+            self.assertEqual(ws["B2"].number_format, "General")
+            self.assertEqual(ws["C2"].value, 11.5)
+            self.assertEqual(ws["C2"].number_format, "General")
+            self.assertEqual(ws["D2"].value, "CM024")
+            wb.close()
 
     def test_generates_unique_output_name_when_file_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -231,7 +275,8 @@ class ExcelProcessorTests(unittest.TestCase):
             self.assertEqual(ws["I2"].value, 20.81)
             self.assertEqual(ws["I3"].value, 4.72)
 
-    def test_processes_all_sheets_in_a_multi_sheet_workbook(self):
+    @patch("cexie_excel_tool.processor.random.randint", side_effect=[14, 35, 15, 6])
+    def test_processes_all_sheets_in_a_multi_sheet_workbook(self, _mock_randint):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
             source = folder / "手动-2026-06-11-单日所有原始数据.xlsx"
@@ -246,8 +291,8 @@ class ExcelProcessorTests(unittest.TestCase):
             self.assertEqual(summary.processed_files, 1)
             self.assertEqual(len(summary.outputs), 1)
             wb = load_workbook(summary.outputs[0], data_only=True)
-            first = wb["手动测斜-18T-ZQT03-202606110750"]
-            second = wb["手动测斜2-JM3-202606110652"]
+            first = wb["手动测斜-18T-ZQT03-202606111435"]
+            second = wb["手动测斜2-JM3-202606111506"]
             self.assertEqual(first["D3"].value, 51.84)
             self.assertEqual(first["E2"].value, -51.84)
             self.assertEqual(second["B2"].value, -22.03)
@@ -255,6 +300,26 @@ class ExcelProcessorTests(unittest.TestCase):
             self.assertEqual(second["D3"].value, 50.84)
             self.assertEqual(second["E2"].value, -50.84)
             wb.close()
+
+    @patch("cexie_excel_tool.processor.random.randint", side_effect=[14, 35, 15, 6])
+    def test_generated_workbook_renames_sheet_time_to_random_afternoon_time(self, _mock_randint):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动-2026-06-11-单日所有原始数据.xlsx"
+            make_multi_sheet_inclinometer_workbook(source)
+
+            summary = apply_corrections_to_folder(
+                folder,
+                {
+                    "18T-ZQT03": {"A0": CorrectionRule("add", "0")},
+                    "JM3": {"A0": CorrectionRule("add", "0")},
+                },
+            )
+
+            wb = load_workbook(summary.outputs[0], read_only=True)
+            sheetnames = wb.sheetnames
+            wb.close()
+            self.assertEqual(sheetnames, ["手动测斜-18T-ZQT03-202606111435", "手动测斜2-JM3-202606111506"])
 
     def test_exports_a0_summary_from_all_sheets(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -272,6 +337,26 @@ class ExcelProcessorTests(unittest.TestCase):
             self.assertEqual([ws["A2"].value, ws["B2"].value, ws["C2"].value], [0.5, -23.03, -23.03])
             self.assertEqual([ws["A3"].value, ws["B3"].value, ws["C3"].value], [1.0, -27.16, -27.16])
             self.assertEqual(ws.freeze_panes, "B2")
+            wb.close()
+
+    def test_exports_a0_summary_sorted_by_point_id_not_sheet_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "手动-2026-06-11-单日所有原始数据.xlsx"
+            make_unsorted_multi_sheet_workbook(source)
+
+            output = export_a0_summary(source)
+
+            wb = load_workbook(output, data_only=True)
+            ws = wb.active
+            self.assertEqual(
+                [ws.cell(row=1, column=column).value for column in range(1, ws.max_column + 1)],
+                ["深度（m）", "18T-ZQT03", "18T-ZQT10", "NP-ZQT3", "NP-ZQT6"],
+            )
+            self.assertEqual(
+                [ws.cell(row=2, column=column).value for column in range(1, ws.max_column + 1)],
+                [0.5, -3, -10, -30, -6],
+            )
             wb.close()
 
     def test_exports_a0_summary_with_unique_name_when_output_exists(self):
