@@ -73,3 +73,7 @@ $py='C:\Users\liangyin725\.cache\codex-runtimes\codex-primary-runtime\dependenci
 ```text
 dist\测斜Excel修正工具.exe
 ```
+
+## 反馈
+
+如有问题或建议，欢迎在仓库中提交 issue。
